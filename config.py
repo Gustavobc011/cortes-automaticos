@@ -25,6 +25,13 @@ INTERVALO_RECONEXAO = 10           # segundos de espera antes de tentar reconect
 TEMPO_MAXIMO_SEM_DADOS = 45        # sem receber vídeo por esse tempo (fora de anúncio) = conexão travada
 TEMPO_ESPERA_FIM_LIVE = 180        # canal offline por esse tempo depois de cair = a live acabou
 
+# ---------------- CHAT (etapa 2) ----------------
+ARQUIVO_BANCO = PASTA_DADOS / "chat.db"
+CHAT_SERVIDOR = "irc.chat.twitch.tv"
+CHAT_PORTA = 6667
+INTERVALO_RESUMO_CHAT = 60         # de quantos em quantos segundos mostrar mensagens/min
+CHAT_TEMPO_SEM_DADOS = 60          # sem nada do servidor por esse tempo: mandamos um PING de teste
+
 # ---------------- CORTES (etapas 3 e 4) ----------------
 NOTA_MINIMA_AUTOCORTE = 7.0        # só salva corte automático acima dessa nota
 MARGEM_ANTES_PICO = 45             # segundos antes do pico (o chat reage com atraso)
