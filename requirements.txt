@@ -1,0 +1,3 @@
+# Dependências Python do projeto (instalar com: pip install -r requirements.txt)
+# Etapa 1 (gravador) usa só a biblioteca padrão do Python.
+# Programas externos necessários (instalados via winget): streamlink e ffmpeg.
