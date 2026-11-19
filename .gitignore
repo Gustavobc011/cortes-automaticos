@@ -1,0 +1,24 @@
+# Ambiente virtual do Python
+venv/
+.venv/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Gravações, cortes e banco de dados (nunca subir para o GitHub)
+blocos/
+cortes/
+dados/*.db
+dados/*.db-journal
+*.ts
+*.mp4
+
+# Configurações locais do editor / Claude Code
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# Arquivos do sistema
+Thumbs.db
+desktop.ini
