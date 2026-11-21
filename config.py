@@ -47,6 +47,7 @@ NOTA_MINIMA_AUTOCORTE = 7.0        # só salva corte automático acima dessa not
 MARGEM_ANTES_PICO = 45             # segundos antes do pico (o chat reage com atraso)
 DURACAO_MINIMA_CORTE = 60          # exigência de monetização do TikTok
 DURACAO_ALVO_CORTE = (60, 90)      # duração mínima e máxima que o detector tenta dar ao corte
+MARGEM_KEYFRAME = 3                # segundos extras no início e no fim (o -c copy corta no keyframe)
 PALAVRAS_REACAO = ["KKKK", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
                    "NÃO ACREDITO", "MDS", "PogChamp", "Pog"]
 
