@@ -32,11 +32,21 @@ CHAT_PORTA = 6667
 INTERVALO_RESUMO_CHAT = 60         # de quantos em quantos segundos mostrar mensagens/min
 CHAT_TEMPO_SEM_DADOS = 60          # sem nada do servidor por esse tempo: mandamos um PING de teste
 
+# ---------------- DETECTOR DE PICOS (etapa 3) ----------------
+JANELA_SEGUNDOS = 10               # o chat é contado em janelas desse tamanho
+JANELA_MEDIA_SEGUNDOS = 300        # média móvel dos últimos 5 min = o "normal" do chat
+HISTORICO_MINIMO_SEGUNDOS = 60     # sem pelo menos 1 min de chat ainda não dá para saber o "normal"
+FATOR_PICO = 3.0                   # pico = janela com volume >= 3x a média
+MINIMO_MENSAGENS_PICO = 15         # e com pelo menos esse tanto de mensagens na janela
+JUNTAR_PICOS_SEGUNDOS = 60         # picos mais próximos que isso viram um só momento
+MARGEM_DEPOIS_PICO = 15            # segundos depois do fim do pico (a reação ainda está rolando)
+AJUSTE_TEMPO_VIDEO = 0             # segundos; positivo = o vídeo começou antes da hora anotada
+
 # ---------------- CORTES (etapas 3 e 4) ----------------
 NOTA_MINIMA_AUTOCORTE = 7.0        # só salva corte automático acima dessa nota
 MARGEM_ANTES_PICO = 45             # segundos antes do pico (o chat reage com atraso)
 DURACAO_MINIMA_CORTE = 60          # exigência de monetização do TikTok
-DURACAO_ALVO_CORTE = (60, 90)
+DURACAO_ALVO_CORTE = (60, 90)      # duração mínima e máxima que o detector tenta dar ao corte
 PALAVRAS_REACAO = ["KKKK", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
                    "NÃO ACREDITO", "MDS", "PogChamp", "Pog"]
 
