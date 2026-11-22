@@ -5,6 +5,7 @@ Os outros módulos fazem `import config` e leem daqui, assim dá para
 ajustar o comportamento do programa sem mexer no código.
 """
 
+import os
 from pathlib import Path
 
 # ---------------- PASTAS ----------------
@@ -53,6 +54,9 @@ PALAVRAS_REACAO = ["KKKK", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
 
 # ---------------- TRANSCRIÇÃO (etapa 5) ----------------
 TRANSCREVER = True                 # False = não transcreve nada, só o chat decide os cortes
+MODELO_WHISPER = "small"           # bom equilíbrio entre qualidade e velocidade no processador
+IDIOMA_WHISPER = "pt"
+THREADS_TRANSCRICAO = max(1, (os.cpu_count() or 2) // 2)   # metade dos núcleos: sobra para o CapCut
 
 # ---------------- FIM DA LIVE (etapa 6) ----------------
 APAGAR_BLOCOS_NO_FIM = True        # apaga a gravação inteira no fim e mantém só os cortes
