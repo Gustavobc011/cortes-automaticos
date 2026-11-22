@@ -303,11 +303,18 @@ class Trecho:
 
 # ---------------------------------------------------------------- gravação
 
-def gravar(entrada: str) -> Path | None:
+def gravar(entrada: str, parar: threading.Event | None = None,
+           ao_criar_sessao=None) -> Path | None:
     """
     Grava a live até ela acabar (ou até Ctrl+C), reconectando quando precisar.
     Devolve a pasta da sessão, ou None se nada foi gravado.
+
+    Usado pelo main.py (etapa 6), que roda a gravação numa thread:
+      parar            -> evento que o main liga para encerrar a gravação
+      ao_criar_sessao  -> função chamada com a Sessao assim que a pasta existe
+                          (o main usa para iniciar o chat com o mesmo id)
     """
+    parar = parar or threading.Event()
     url, nome = montar_url(entrada)
     config.PASTA_BLOCOS.mkdir(parents=True, exist_ok=True)
     if not verificar_disco(config.PASTA_BLOCOS):
@@ -315,6 +322,8 @@ def gravar(entrada: str) -> Path | None:
     log(f"Espaço livre em disco: {espaco_livre_gb(config.PASTA_BLOCOS):.1f} GB")
 
     sessao = Sessao(url, nome)
+    if ao_criar_sessao:
+        ao_criar_sessao(sessao)
     log(f"Conectando em {url} ...")
     log(f"Pasta da gravação: {sessao.pasta}")
     log("Aperte Ctrl+C para parar.\n")
@@ -332,7 +341,8 @@ def gravar(entrada: str) -> Path | None:
 
             # Fica vigiando enquanto o trecho grava
             while trecho.rodando():
-                time.sleep(1)
+                if parar.wait(1):          # espera 1 s; o main pediu para parar?
+                    raise KeyboardInterrupt
 
                 if time.monotonic() - ultima_checagem_disco > config.INTERVALO_CHECAGEM_DISCO:
                     ultima_checagem_disco = time.monotonic()
@@ -351,8 +361,8 @@ def gravar(entrada: str) -> Path | None:
             # Decide se reconecta ou se a live acabou
             if trecho.recebeu_dados:
                 offline_desde = None
-                numero_trecho_gb = trecho.bytes_recebidos / 1024**3
-                log(f"Trecho {trecho.numero} terminou ({numero_trecho_gb:.2f} GB gravados). "
+                gb = trecho.bytes_recebidos / 1024**3
+                log(f"Trecho {trecho.numero} terminou ({gb:.2f} GB gravados). "
                     "A conexão caiu ou a live parou.")
             elif not sessao.dados["trechos"]:
                 # Nunca chegou vídeo: o canal já estava offline (ou o link está errado)
@@ -366,7 +376,8 @@ def gravar(entrada: str) -> Path | None:
                     break
 
             log(f"Tentando reconectar em {config.INTERVALO_RECONEXAO} s...")
-            time.sleep(config.INTERVALO_RECONEXAO)
+            if parar.wait(config.INTERVALO_RECONEXAO):
+                raise KeyboardInterrupt
 
     except KeyboardInterrupt:
         print()
