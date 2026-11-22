@@ -58,5 +58,10 @@ MODELO_WHISPER = "small"           # bom equilíbrio entre qualidade e velocidad
 IDIOMA_WHISPER = "pt"
 THREADS_TRANSCRICAO = max(1, (os.cpu_count() or 2) // 2)   # metade dos núcleos: sobra para o CapCut
 
+# ---------------- ORQUESTRADOR (etapa 6) ----------------
+INTERVALO_DETECTOR = 300           # roda o detector a cada 5 min (e sempre que um bloco fecha)
+INTERVALO_VERIFICACAO = 10         # de quantos em quantos segundos o main confere os blocos
+NOTIFICAR_CORTES = True            # notificação do Windows a cada corte novo
+
 # ---------------- FIM DA LIVE (etapa 6) ----------------
 APAGAR_BLOCOS_NO_FIM = True        # apaga a gravação inteira no fim e mantém só os cortes
