@@ -40,16 +40,19 @@ HISTORICO_MINIMO_SEGUNDOS = 60     # sem pelo menos 1 min de chat ainda não dá
 FATOR_PICO = 3.0                   # pico = janela com volume >= 3x a média
 MINIMO_MENSAGENS_PICO = 15         # e com pelo menos esse tanto de mensagens na janela
 JUNTAR_PICOS_SEGUNDOS = 60         # picos mais próximos que isso viram um só momento
-MARGEM_DEPOIS_PICO = 15            # segundos depois do fim do pico (a reação ainda está rolando)
+MARGEM_DEPOIS_PICO = 15            # segundos extras depois que o chat acalma (a cena fecha com calma)
+FATOR_CALMA = 1.5                  # chat "calmo" = janela abaixo de 1,5x a média de antes do pico
+CALMA_SEGUNDOS = 30                # o momento acaba quando o chat fica calmo por esse tempo seguido
 AJUSTE_TEMPO_VIDEO = 0             # segundos; positivo = o vídeo começou antes da hora anotada
 
 # ---------------- CORTES (etapas 3 e 4) ----------------
-NOTA_MINIMA_AUTOCORTE = 7.0        # só salva corte automático acima dessa nota
+NOTA_MINIMA_AUTOCORTE = 4.0        # só salva corte automático acima dessa nota (etapa 7: era 7.0)
 MARGEM_ANTES_PICO = 45             # segundos antes do pico (o chat reage com atraso)
 DURACAO_MINIMA_CORTE = 60          # exigência de monetização do TikTok
-DURACAO_ALVO_CORTE = (60, 90)      # duração mínima e máxima que o detector tenta dar ao corte
+DURACAO_MAXIMA_CORTE = 180         # limite para o fim dinâmico não virar um vídeo longo demais
 MARGEM_KEYFRAME = 3                # segundos extras no início e no fim (o -c copy corta no keyframe)
-PALAVRAS_REACAO = ["KKKK", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
+# "KKK" (3 letras) também pega "kkkk..."; "CLAP" foi a palavra que mais subiu nos picos do teste
+PALAVRAS_REACAO = ["KKK", "CLAP", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
                    "NÃO ACREDITO", "MDS", "PogChamp", "Pog"]
 
 # ---------------- TRANSCRIÇÃO (etapa 5) ----------------

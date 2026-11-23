@@ -203,6 +203,24 @@ def agrupar_picos(picos: dict[int, float]) -> list[list[int]]:
     return grupos
 
 
+def fim_do_momento(janelas: list[Janela], ultima_do_pico: int, media: float) -> int:
+    """
+    Procura, depois do pico, quando o chat volta ao normal.
+    "Calmo" = janela abaixo de FATOR_CALMA x a média de antes do pico. O momento
+    acaba na primeira janela de uma sequência calma de CALMA_SEGUNDOS seguidos.
+    Devolve o índice dessa janela (o corte termina no começo dela).
+    Se o chat ainda não acalmou (a live está rolando), devolve o fim dos dados.
+    """
+    limite = config.FATOR_CALMA * max(media, 1.0)
+    calmas_necessarias = max(1, config.CALMA_SEGUNDOS // config.JANELA_SEGUNDOS)
+    seguidas = 0
+    for i in range(ultima_do_pico + 1, len(janelas)):
+        seguidas = seguidas + 1 if janelas[i].mensagens < limite else 0
+        if seguidas == calmas_necessarias:
+            return i - calmas_necessarias + 1   # primeira janela da sequência calma
+    return len(janelas)
+
+
 def calcular_nota(razao: float, janelas_em_pico: int, pct_reacoes: float) -> dict:
     """
     Nota de 0 a 10, somando três partes:
@@ -235,8 +253,6 @@ def detectar(pasta: Path) -> list[dict]:
     picos = encontrar_picos(janelas)
     blocos = linha_do_tempo_video(pasta)
     tamanho = config.JANELA_SEGUNDOS
-    duracao_min = max(config.DURACAO_MINIMA_CORTE, config.DURACAO_ALVO_CORTE[0])
-    duracao_max = config.DURACAO_ALVO_CORTE[1]
     candidatos = []
 
     for grupo in agrupar_picos(picos):
@@ -248,13 +264,15 @@ def detectar(pasta: Path) -> list[dict]:
         msgs = sum(j.mensagens for j in janelas_grupo)
         pct_reacoes = 100 * sum(j.reacoes for j in janelas_grupo) / msgs
 
-        # Intervalo do corte: começa MARGEM_ANTES_PICO antes do pico e termina um
-        # pouco depois dele, respeitando a duração mínima e a máxima
+        # Intervalo do corte: começa MARGEM_ANTES_PICO antes do pico e termina quando
+        # o chat acalma (fim dinâmico), respeitando a duração mínima e a máxima.
+        # A calma é medida contra a média de ANTES do pico (a do 1º pico do grupo).
         pico_inicio = t0 + grupo[0] * tamanho
-        pico_fim = t0 + (grupo[-1] + 1) * tamanho
+        calmo = fim_do_momento(janelas, grupo[-1], picos[grupo[0]])
         inicio = pico_inicio - config.MARGEM_ANTES_PICO
-        fim = pico_fim + config.MARGEM_DEPOIS_PICO
-        fim = min(max(fim, inicio + duracao_min), inicio + duracao_max)
+        fim = t0 + calmo * tamanho + config.MARGEM_DEPOIS_PICO
+        fim = min(max(fim, inicio + config.DURACAO_MINIMA_CORTE),
+                  inicio + config.DURACAO_MAXIMA_CORTE)
 
         partes = localizar_no_video(inicio, fim, blocos)
         segundos_com_video = sum(p["ate"] - p["de"] for p in partes)
