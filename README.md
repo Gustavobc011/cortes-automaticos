@@ -47,6 +47,9 @@ flowchart LR
 | 5 | `transcritor.py` | Transcreve só os cortes, com o modelo Whisper `small` no processador, e gera a legenda `.srt`. |
 | 6 | `main.py` | Roda tudo junto, chama o detector a cada 5 min e sempre que um bloco fecha, mostra uma notificação do Windows a cada corte novo e impede o notebook de suspender. |
 | extra | `vigia.py` | Modo automático: vigia uma lista de canais por ordem de prioridade e grava sozinho quem entrar ao vivo no jogo escolhido, trocando de canal quando um de prioridade maior aparece. |
+| extra | `estado_vigia.py` | O estado do vigia (vigiando, gravando, pausado) num lugar só: o ícone e o Telegram leem e fazem pedidos, só o vigia executa. |
+| extra | `bandeja.py` | Ícone perto do relógio do Windows: cor conforme o estado, pausar, retomar, abrir os cortes e o log, sair. |
+| extra | `telegram_bot.py` | Bot do Telegram: avisa cada corte (com botões para aprovar ou descartar), os eventos do vigia e os erros, e aceita comandos. |
 
 ### A nota de cada momento
 
@@ -70,6 +73,8 @@ e no máximo 3 min.
 - **SQLite** (modo WAL): guarda o chat
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)**: transcrição no processador (`int8`)
 - **psutil**: deixa a transcrição em prioridade baixa
+- **pystray + Pillow**: ícone do vigia na bandeja do Windows
+- **API do Telegram**: chamada direto com `urllib` (biblioteca padrão), sem biblioteca extra
 
 ## Instalação (Windows)
 
@@ -167,7 +172,50 @@ Windows no login, e decide sozinho o que gravar:
 ```
 
 O comando acima só mostra quem está ao vivo agora. Para encerrar o vigia de
-forma limpa (esperando os cortes), crie o arquivo `dados\parar_vigia`.
+forma limpa (esperando os cortes), crie o arquivo `dados\parar_vigia`, use
+"Sair" no ícone perto do relógio ou `/parar` no Telegram.
+
+### Bot do Telegram (opcional)
+
+Com o bot, o vigia manda pelo Telegram, só em texto (nenhum vídeo sai do
+computador):
+
+- **Cortes:** cada corte salvo, com streamer, nota, horário, duração,
+  transcrição resumida e o caminho do arquivo. Embaixo vêm os botões
+  **👍 Bom** e **👎 Descartar**. Descartar move o corte para `descartados/`, dentro
+  da pasta da live, e ele é apagado depois de `DIAS_MANTER_DESCARTADOS` (7 dias).
+  **↩️ Desfazer** devolve. A escolha fica marcada no `lista.md` e no `candidatos.json`.
+- **Avisos:** vigia iniciado, live começou, troca de canal (com o motivo), live
+  encerrada (duração e cortes) e erros (disco quase cheio, gravação caiu).
+- **Comandos:** `/status`, `/pausar`, `/retomar`, `/parar` (pede confirmação),
+  `/cortes` (os de hoje) e `/ajuda`.
+
+O bot só responde ao seu `chat_id` e ignora qualquer outra pessoa. Se a
+internet cair, as mensagens esperam numa fila salva em disco e saem quando ela
+voltar. Ele roda em threads próprias, então nunca atrasa a gravação.
+
+**Como configurar:**
+
+1. **Criar o bot:** no Telegram, abra uma conversa com o **@BotFather**, mande
+   `/newbot` e escolha um nome e um usuário (terminado em `bot`). Ele responde com
+   o **token** do bot. Trate esse token como uma senha: quem tiver ele controla o bot.
+2. **Guardar o token:** copie o `.env.exemplo` para `.env` e cole o token em
+   `TELEGRAM_TOKEN=`. O `.env` está no `.gitignore` e nunca vai para o GitHub.
+
+   ```powershell
+   Copy-Item .env.exemplo .env
+   ```
+
+3. **Descobrir o seu `chat_id`:** abra a conversa com o seu bot, toque em
+   **Iniciar** e mande qualquer mensagem. Depois, com o vigia desligado, rode o
+   comando abaixo. Ele grava o `TELEGRAM_CHAT_ID` no `.env` sozinho.
+
+   ```powershell
+   .\venv\Scripts\python telegram_bot.py --descobrir-chat-id
+   ```
+
+4. **Ligar o vigia** de novo. A primeira mensagem do bot é "Vigia iniciado".
+   Para desligar o bot sem apagar nada, use `TELEGRAM_ATIVO = False` no `config.py`.
 
 ## Decisões técnicas
 
