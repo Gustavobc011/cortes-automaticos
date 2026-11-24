@@ -16,6 +16,7 @@ dados/*.db-shm
 dados/*.log*
 dados/gravacoes/
 dados/parar_vigia
+dados/telegram_*.json
 *.ts
 *.mp4
 

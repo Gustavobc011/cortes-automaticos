@@ -81,3 +81,30 @@ APAGAR_BLOCOS_VIGIA = True         # no vigia não há quem responda: apaga os b
 ARQUIVO_LOG_VIGIA = PASTA_DADOS / "vigia.log"          # o que o vigia fez, para conferir depois
 PASTA_LOGS_GRAVACOES = PASTA_DADOS / "gravacoes"       # a saída completa de cada gravação
 ARQUIVO_PARAR_VIGIA = PASTA_DADOS / "parar_vigia"      # crie esse arquivo para o vigia encerrar
+
+
+# ---------------- TELEGRAM (bot do vigia) ----------------
+def _ler_env(arquivo: Path) -> dict[str, str]:
+    """
+    Lê o arquivo .env (linhas CHAVE=valor). Os segredos ficam nele, fora do
+    código e fora do GitHub (o .env está no .gitignore).
+    """
+    valores = {}
+    if arquivo.exists():
+        for linha in arquivo.read_text(encoding="utf-8-sig").splitlines():
+            if "=" in linha and not linha.lstrip().startswith("#"):
+                chave, valor = linha.split("=", 1)
+                valores[chave.strip()] = valor.strip().strip('"').strip("'")
+    return valores
+
+
+ARQUIVO_ENV = PASTA_PROJETO / ".env"
+_env = _ler_env(ARQUIVO_ENV)
+TELEGRAM_ATIVO = True              # False = o vigia não usa o Telegram
+TELEGRAM_TOKEN = _env.get("TELEGRAM_TOKEN", "")        # nunca escrever o token em log ou na tela
+TELEGRAM_CHAT_ID = _env.get("TELEGRAM_CHAT_ID", "")    # o bot só conversa com este chat
+DIAS_MANTER_DESCARTADOS = 7        # cortes descartados pelo Telegram são apagados depois disso
+TAMANHO_RESUMO_TRANSCRICAO = 500   # caracteres da transcrição na mensagem de corte
+ESPERA_MAXIMA_TRANSCRICAO = 900    # segundos: depois disso o aviso de corte sai sem transcrição
+ARQUIVO_FILA_TELEGRAM = PASTA_DADOS / "telegram_fila.json"     # mensagens esperando internet
+ARQUIVO_CORTES_TELEGRAM = PASTA_DADOS / "telegram_cortes.json" # cortes já avisados e seus botões
