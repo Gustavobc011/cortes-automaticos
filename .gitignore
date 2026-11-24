@@ -11,6 +11,11 @@ blocos/
 cortes/
 dados/*.db
 dados/*.db-journal
+dados/*.db-wal
+dados/*.db-shm
+dados/*.log*
+dados/gravacoes/
+dados/parar_vigia
 *.ts
 *.mp4
 

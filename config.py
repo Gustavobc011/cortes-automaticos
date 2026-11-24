@@ -68,3 +68,16 @@ NOTIFICAR_CORTES = True            # notificação do Windows a cada corte novo
 
 # ---------------- FIM DA LIVE (etapa 6) ----------------
 APAGAR_BLOCOS_NO_FIM = True        # apaga a gravação inteira no fim e mantém só os cortes
+
+# ---------------- VIGIA (modo automático, vigia.py) ----------------
+# Ordem de prioridade: o 1º tem preferência máxima. Troque pelos canais que você quer.
+CANAIS_VIGIADOS = ["alanzoka", "cellbit", "bisteconee", "facada"]
+INTERVALO_VIGIA = 120              # segundos entre cada checagem de quem está ao vivo
+CATEGORIA_ALVO = "Grand Theft Auto VI"   # só grava lives nessa categoria (None = qualquer uma)
+CANAIS_QUALQUER_CATEGORIA = []     # canais da lista que gravam em qualquer categoria
+IGNORAR_REPRISES = True            # não grava "RERUN"/"REPRISE" (reprise de uma live antiga)
+OFFLINE_TOLERANCIA = 300           # segundos sem stream (ou fora da categoria) até a live "acabar"
+APAGAR_BLOCOS_VIGIA = True         # no vigia não há quem responda: apaga os blocos sozinho no fim
+ARQUIVO_LOG_VIGIA = PASTA_DADOS / "vigia.log"          # o que o vigia fez, para conferir depois
+PASTA_LOGS_GRAVACOES = PASTA_DADOS / "gravacoes"       # a saída completa de cada gravação
+ARQUIVO_PARAR_VIGIA = PASTA_DADOS / "parar_vigia"      # crie esse arquivo para o vigia encerrar
