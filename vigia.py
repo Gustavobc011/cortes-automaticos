@@ -11,6 +11,7 @@ rodando o main.py como outro processo. Um canal por vez.
 """
 
 import ctypes
+import html
 import json
 import logging
 import logging.handlers
@@ -37,6 +38,28 @@ log = logging.getLogger("vigia")
 SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 REGEX_REPRISE = re.compile(r"\W*(RERUN|REPRISE)\b", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------- avisos
+
+BOT = None                         # o bot do Telegram, se estiver ligado (criado no main())
+_ultimos_problemas: dict[str, float] = {}
+
+
+def avisar(titulo: str, texto: str, emoji: str = "ℹ️") -> None:
+    """Notificação do Windows e mensagem no Telegram (se ligado). Nunca espera a internet."""
+    notificar(titulo, texto)
+    if BOT:
+        BOT.enviar(f"{emoji} <b>{html.escape(titulo)}</b>\n{html.escape(texto)}")
+
+
+def avisar_problema(titulo: str, texto: str) -> None:
+    """Como avisar(), mas o mesmo problema só é avisado uma vez a cada 10 min."""
+    chave = f"{titulo}|{texto}"
+    if time.monotonic() - _ultimos_problemas.get(chave, -1e9) < 600:
+        return
+    _ultimos_problemas[chave] = time.monotonic()
+    avisar(titulo, texto, "⚠️")
 
 
 # ---------------------------------------------------------------- parte 1: quem está ao vivo
@@ -66,7 +89,7 @@ def checar_canal(canal: str) -> Status:
         resultado = subprocess.run(
             ["streamlink", "--json", f"https://www.twitch.tv/{canal}"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60, creationflags=SEM_JANELA,
+            timeout=60, creationflags=SEM_JANELA, stdin=subprocess.DEVNULL,
         )
         dados = json.loads(resultado.stdout)
     except subprocess.TimeoutExpired:
@@ -147,6 +170,11 @@ class Gravacao:
                 arquivo.flush()
                 if "Pasta da gravação:" in linha:
                     self.pasta = Path(linha.split("Pasta da gravação:", 1)[1].strip())
+                # O gravador marca os problemas com "ERRO:" e "AVISO:" (disco cheio,
+                # ffmpeg travado...): esses vão para o Telegram e para o log do vigia
+                if m := re.search(r"\b(ERRO|AVISO): (.+)", linha):
+                    log.warning(f"#{self.canal}: {m.group(1)}: {m.group(2).strip()}")
+                    avisar_problema(f"Problema na gravação de #{self.canal}", m.group(2).strip())
 
     def rodando(self) -> bool:
         return self.processo.poll() is None
@@ -192,7 +220,7 @@ class Vigia:
         canais = ", ".join(config.CANAIS_VIGIADOS)
         alvo = config.CATEGORIA_ALVO or "qualquer categoria"
         log.info(f"Vigia iniciado. Canais (em ordem de prioridade): {canais} | {alvo}")
-        notificar("Vigia iniciado", f"{canais} ({alvo})")
+        avisar("Vigia iniciado", f"Canais: {canais}\nCategoria: {alvo}", "🟢")
         try:
             while True:
                 self.conferir_gravacoes()
@@ -215,6 +243,8 @@ class Vigia:
                         self.checar()
                     except Exception:
                         log.exception("Erro na checagem (tento de novo na próxima)")
+                        avisar_problema("Erro no vigia", "Uma checagem falhou (detalhes no vigia.log). "
+                                                         "Tento de novo na próxima.")
                 self.publicar_estado()
                 # Espera 5 s, ou menos se chegar um pedido (o ícone "acorda" o vigia)
                 self.estado.acordar.wait(5)
@@ -247,7 +277,7 @@ class Vigia:
             # Para a gravação de forma limpa: os cortes terminam em segundo plano
             self.encerrar_atual("vigia pausado")
         log.info("Vigia pausado.")
-        notificar("Vigia pausado", "Nenhum canal vai ser gravado até você retomar.")
+        avisar("Vigia pausado", "Nenhum canal vai ser gravado até você retomar.", "⏸️")
 
     def retomar(self) -> None:
         if not self.pausado:
@@ -255,7 +285,7 @@ class Vigia:
         self.pausado = False
         self.proxima_checagem = 0                     # checa a lista na hora
         log.info("Vigia retomado.")
-        notificar("Vigia retomado", "Voltei a vigiar os canais.")
+        avisar("Vigia retomado", "Voltei a vigiar os canais.", "▶️")
 
     # ---- checagens
 
@@ -313,7 +343,7 @@ class Vigia:
     def iniciar(self, canal: str, prioridade: int, status: Status) -> None:
         self.atual = Gravacao(canal, prioridade)
         log.info(f"Gravando #{canal} (prioridade {prioridade}). Saída em {self.atual.arquivo_log}")
-        notificar(f"Live começou: #{canal}", f"{status.categoria}. Gravando.")
+        avisar(f"Live começou: #{canal}", f"{status.categoria}. Gravando.", "🔴")
 
     def encerrar_atual(self, motivo: str) -> None:
         log.info(f"Encerrando #{self.atual.canal}: {motivo}")
@@ -326,7 +356,7 @@ class Vigia:
         antigo = self.atual
         motivo = f"#{canal} (prioridade {prioridade}) entrou ao vivo em {status.categoria}"
         log.info(f"TROCA: #{antigo.canal} -> #{canal}. Motivo: {motivo}")
-        notificar(f"Troca: #{antigo.canal} → #{canal}", motivo)
+        avisar(f"Troca de canal: #{antigo.canal} → #{canal}", f"Motivo: {motivo}", "🔀")
         # A gravação antiga termina os cortes em segundo plano; a nova já começa
         self.encerrar_atual(f"troca para #{canal}")
         self.iniciar(canal, prioridade, status)
@@ -347,15 +377,19 @@ class Vigia:
         if codigo != 0:
             log.error(f"#{gravacao.canal}: o main.py saiu com erro (código {codigo}). "
                       f"Veja {gravacao.arquivo_log}")
+            avisar_problema(f"Gravação caiu: #{gravacao.canal}",
+                            f"O main.py fechou com erro (código {codigo}). Detalhes em {gravacao.arquivo_log}")
         resumo = gravacao.resumo()
         if resumo is None:
             log.warning(f"#{gravacao.canal}: nada foi gravado ({motivo}).")
+            avisar_problema(f"Nada gravado: #{gravacao.canal}",
+                            f"A gravação terminou sem nenhum vídeo salvo ({motivo}).")
             return
-        texto = (f"{formatar_duracao(resumo['duracao_segundos'])}, "
-                 f"{resumo['cortes']} corte(s) salvo(s). Motivo: {motivo}")
-        log.info(f"Live terminou: #{gravacao.canal}: {texto} | "
+        texto = (f"Duração: {formatar_duracao(resumo['duracao_segundos'])}\n"
+                 f"Cortes salvos: {resumo['cortes']}\nMotivo: {motivo}")
+        log.info(f"Live terminou: #{gravacao.canal}: {texto.replace(chr(10), ' | ')} | "
                  f"{resumo['mensagens']} mensagens, {resumo['candidatos']} candidatos")
-        notificar(f"Live terminou: #{gravacao.canal}", texto)
+        avisar(f"Live encerrada: #{gravacao.canal}", texto, "🏁")
 
     def encerrar(self) -> None:
         """Pede para a gravação atual parar e espera os cortes ficarem prontos."""
@@ -374,6 +408,7 @@ class Vigia:
         except KeyboardInterrupt:
             log.info("Saindo sem esperar (o main.py termina os cortes sozinho).")
         log.info("Vigia encerrado.")
+        avisar("Vigia encerrado", "Para ligar de novo, use o Agendador de Tarefas.", "⏹️")
 
 
 # ---------------------------------------------------------------- início
@@ -413,14 +448,32 @@ def main() -> None:
         return
     estado = EstadoVigia()
     bandeja = iniciar_bandeja(estado)
+    iniciar_telegram(estado)
     try:
         Vigia(estado).rodar()
     except Exception:
         log.exception("Erro inesperado: o vigia caiu")
+        avisar_problema("O vigia caiu", "Erro inesperado (detalhes no vigia.log). "
+                                        "O Agendador de Tarefas tenta ligar de novo.")
         sys.exit(1)                                   # código de erro: o Agendador reinicia
     finally:
+        if BOT:
+            BOT.parar()                               # manda o que der da fila antes de fechar
         if bandeja:
             bandeja.parar()                           # o ícone some junto com o vigia
+
+
+def iniciar_telegram(estado: EstadoVigia) -> None:
+    """Liga o bot do Telegram, se TELEGRAM_ATIVO e o .env estiverem preenchidos."""
+    global BOT
+    from telegram_bot import BotTelegram
+    if not config.TELEGRAM_ATIVO:
+        return
+    if not BotTelegram.configurado():
+        log.warning("Telegram ligado no config.py, mas falta TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID no .env.")
+        return
+    BOT = BotTelegram(estado)
+    BOT.iniciar()
 
 
 def iniciar_bandeja(estado: EstadoVigia):
