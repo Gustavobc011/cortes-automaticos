@@ -46,6 +46,7 @@ flowchart LR
 | 4 | `cortador.py` | Converte o horário do momento em "qual bloco, de que segundo a que segundo" e extrai o trecho sem recodificar. Gera também uma `lista.md` com os cortes. |
 | 5 | `transcritor.py` | Transcreve só os cortes, com o modelo Whisper `small` no processador, e gera a legenda `.srt`. |
 | 6 | `main.py` | Roda tudo junto, chama o detector a cada 5 min e sempre que um bloco fecha, mostra uma notificação do Windows a cada corte novo e impede o notebook de suspender. |
+| extra | `vigia.py` | Modo automático: vigia uma lista de canais por ordem de prioridade e grava sozinho quem entrar ao vivo no jogo escolhido, trocando de canal quando um de prioridade maior aparece. |
 
 ### A nota de cada momento
 
@@ -138,6 +139,35 @@ Cada etapa também roda sozinha, o que ajuda a testar ou refazer uma parte:
 
 Todas as configurações (nota mínima, margens, palavras de reação, tamanho dos
 blocos, modelo do Whisper) ficam comentadas em [`config.py`](config.py).
+
+### Modo vigia (automático)
+
+O `vigia.py` fica rodando sem janela, iniciado pelo Agendador de Tarefas do
+Windows no login, e decide sozinho o que gravar:
+
+- **Checagem:** a cada 2 min pergunta ao streamlink (`--json`, sem conta nem API)
+  quais canais de `CANAIS_VIGIADOS` estão ao vivo na `CATEGORIA_ALVO`. Reprises
+  ("RERUN") são ignoradas.
+- **Escolha:** grava o canal de maior prioridade disponível, rodando o
+  `main.py --vigia` como outro processo. Um canal por vez.
+- **Troca:** se um canal de prioridade maior entra ao vivo, a gravação atual
+  termina os cortes em segundo plano e a nova começa na hora. Um canal de
+  prioridade menor nunca interrompe um de prioridade maior.
+- **Fim da live:** o canal ficou offline ou fora do jogo por mais de
+  `OFFLINE_TOLERANCIA` (5 min). Uma queda curta continua na mesma gravação.
+- **Disco:** no fim, depois que os cortes e as transcrições ficam prontos, os
+  blocos são apagados (`APAGAR_BLOCOS_VIGIA`), porque não há ninguém para responder.
+- **Avisos:** notificação quando o vigia inicia, quando uma live começa, quando
+  há troca (com o motivo) e quando a live termina (duração e cortes salvos).
+  Tudo fica registrado em `dados/vigia.log`, e a saída completa de cada
+  gravação em `dados/gravacoes/`.
+
+```powershell
+.\venv\Scripts\python vigia.py --checar
+```
+
+O comando acima só mostra quem está ao vivo agora. Para encerrar o vigia de
+forma limpa (esperando os cortes), crie o arquivo `dados\parar_vigia`.
 
 ## Decisões técnicas
 
