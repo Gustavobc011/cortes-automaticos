@@ -179,6 +179,11 @@ class Vigia:
         self.proxima_checagem = 0.0
 
     def rodar(self) -> None:
+        # Um parar_vigia que sobrou (criado com o vigia desligado, por exemplo)
+        # não pode fazer este vigia fechar logo depois de ligar
+        if config.ARQUIVO_PARAR_VIGIA.exists():
+            config.ARQUIVO_PARAR_VIGIA.unlink()
+            log.info("Apaguei um arquivo parar_vigia antigo que tinha sobrado.")
         canais = ", ".join(config.CANAIS_VIGIADOS)
         alvo = config.CATEGORIA_ALVO or "qualquer categoria"
         log.info(f"Vigia iniciado. Canais (em ordem de prioridade): {canais} | {alvo}")
