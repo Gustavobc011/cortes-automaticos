@@ -25,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 
 import config
+import estado_vigia
+from estado_vigia import EstadoVigia
 from main import notificar
 
 PASTA_PROJETO = Path(__file__).resolve().parent
@@ -172,11 +174,14 @@ class Gravacao:
 class Vigia:
     """Decide quem gravar, quando trocar de canal e quando a live acabou."""
 
-    def __init__(self):
+    def __init__(self, estado: EstadoVigia | None = None):
+        self.estado = estado or EstadoVigia()         # lido pelo ícone (e pelo Telegram)
         self.atual: Gravacao | None = None
         self.finalizando: list[Gravacao] = []         # receberam "parar", ainda cortando
         self.ultimo_estado: dict[str, str] = {}       # para só registrar o que mudou
         self.proxima_checagem = 0.0
+        self.pausado = False
+        self.encerrando = False
 
     def rodar(self) -> None:
         # Um parar_vigia que sobrou (criado com o vigia desligado, por exemplo)
@@ -195,17 +200,62 @@ class Vigia:
                     config.ARQUIVO_PARAR_VIGIA.unlink()
                     log.info("Arquivo parar_vigia encontrado: encerrando o vigia.")
                     break
-                if time.monotonic() >= self.proxima_checagem:
+                # Pedidos do ícone (ou do Telegram): só o vigia executa
+                pedido = self.estado.pegar_pedido()
+                if pedido == "sair":
+                    log.info("Pedido para sair: encerrando o vigia.")
+                    break
+                if pedido == "pausar":
+                    self.pausar()
+                elif pedido == "retomar":
+                    self.retomar()
+                if not self.pausado and time.monotonic() >= self.proxima_checagem:
                     self.proxima_checagem = time.monotonic() + config.INTERVALO_VIGIA
                     try:
                         self.checar()
                     except Exception:
                         log.exception("Erro na checagem (tento de novo na próxima)")
-                time.sleep(5)
+                self.publicar_estado()
+                # Espera 5 s, ou menos se chegar um pedido (o ícone "acorda" o vigia)
+                self.estado.acordar.wait(5)
+                self.estado.acordar.clear()
         except KeyboardInterrupt:
             log.info("Ctrl+C: encerrando o vigia.")
         finally:
             self.encerrar()
+
+    # ---- estado, pausa e retomada
+
+    def publicar_estado(self) -> None:
+        """Copia a situação do vigia para o EstadoVigia (de onde o ícone lê)."""
+        finalizando = [g.canal for g in self.finalizando]
+        if self.encerrando:
+            self.estado.atualizar(estado_vigia.ENCERRANDO, finalizando=finalizando)
+        elif self.pausado:
+            self.estado.atualizar(estado_vigia.PAUSADO, finalizando=finalizando)
+        elif self.atual:
+            self.estado.atualizar(estado_vigia.GRAVANDO, self.atual.canal,
+                                  self.atual.inicio, finalizando)
+        else:
+            self.estado.atualizar(estado_vigia.VIGIANDO, finalizando=finalizando)
+
+    def pausar(self) -> None:
+        if self.pausado:
+            return
+        self.pausado = True
+        if self.atual:
+            # Para a gravação de forma limpa: os cortes terminam em segundo plano
+            self.encerrar_atual("vigia pausado")
+        log.info("Vigia pausado.")
+        notificar("Vigia pausado", "Nenhum canal vai ser gravado até você retomar.")
+
+    def retomar(self) -> None:
+        if not self.pausado:
+            return
+        self.pausado = False
+        self.proxima_checagem = 0                     # checa a lista na hora
+        log.info("Vigia retomado.")
+        notificar("Vigia retomado", "Voltei a vigiar os canais.")
 
     # ---- checagens
 
@@ -309,12 +359,17 @@ class Vigia:
 
     def encerrar(self) -> None:
         """Pede para a gravação atual parar e espera os cortes ficarem prontos."""
+        self.encerrando = True
         if self.atual:
             self.encerrar_atual("o vigia foi encerrado")
         try:
+            avisado = 0.0
             while self.finalizando:
-                log.info(f"Esperando {len(self.finalizando)} gravação(ões) terminar(em) os cortes...")
-                time.sleep(15)
+                self.publicar_estado()
+                if time.monotonic() - avisado > 60:   # no log, um aviso por minuto basta
+                    avisado = time.monotonic()
+                    log.info(f"Esperando {len(self.finalizando)} gravação(ões) terminar(em) os cortes...")
+                time.sleep(5)
                 self.conferir_gravacoes()
         except KeyboardInterrupt:
             log.info("Saindo sem esperar (o main.py termina os cortes sozinho).")
@@ -356,11 +411,28 @@ def main() -> None:
     if ja_existe_outro_vigia():
         log.info("Já existe um vigia rodando. Este vai fechar.")
         return
+    estado = EstadoVigia()
+    bandeja = iniciar_bandeja(estado)
     try:
-        Vigia().rodar()
+        Vigia(estado).rodar()
     except Exception:
         log.exception("Erro inesperado: o vigia caiu")
         sys.exit(1)                                   # código de erro: o Agendador reinicia
+    finally:
+        if bandeja:
+            bandeja.parar()                           # o ícone some junto com o vigia
+
+
+def iniciar_bandeja(estado: EstadoVigia):
+    """Mostra o ícone perto do relógio. Sem ele o vigia funciona igual."""
+    try:
+        from bandeja import Bandeja
+        bandeja = Bandeja(estado)
+        bandeja.iniciar()
+        return bandeja
+    except Exception:
+        log.exception("Não consegui criar o ícone da bandeja (o vigia continua sem ele)")
+        return None
 
 
 def mostrar_quem_esta_ao_vivo(canais: list[str]) -> None:
