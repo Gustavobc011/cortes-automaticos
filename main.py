@@ -15,7 +15,9 @@ Ctrl+C ou o fim da live encerram tudo de forma limpa. No fim mostra um resumo
 e, se APAGAR_BLOCOS_NO_FIM = True, pergunta se pode apagar a gravação.
 """
 
+import argparse
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -91,13 +93,15 @@ def notificar(titulo: str, texto: str) -> None:
 class Orquestrador:
     """Junta gravador, chat, detector, cortador e transcritor numa live só."""
 
-    def __init__(self, canal: str):
+    def __init__(self, canal: str, modo_vigia: bool = False):
         self.canal = canal
+        self.modo_vigia = modo_vigia          # rodando pelo vigia.py: ninguém no terminal
         self.parar = threading.Event()        # liga quando Ctrl+C: avisa o gravador
         self.pasta: Path | None = None        # pasta da sessão em blocos/
         self.monitor: MonitorChat | None = None
         self.thread_chat: threading.Thread | None = None
         self.inicio = time.monotonic()
+        self.fim_gravacao = self.inicio       # atualizado quando o gravador para
 
         self.blocos_fechados = 0
         self.ultimo_detector = 0.0
@@ -121,6 +125,8 @@ class Orquestrador:
         thread_gravador = threading.Thread(
             target=gravador.gravar, args=(self.canal, self.parar, self.ao_criar_sessao))
         thread_gravador.start()
+        if self.modo_vigia:
+            threading.Thread(target=self.ouvir_vigia, daemon=True).start()
         try:
             # A thread principal só vigia: o Ctrl+C sempre chega nela
             while thread_gravador.is_alive():
@@ -132,8 +138,22 @@ class Orquestrador:
             self.parar.set()
             thread_gravador.join()
         finally:
+            self.fim_gravacao = time.monotonic()
             self.encerrar()
             manter_acordado(False)
+
+    def ouvir_vigia(self) -> None:
+        """
+        No modo vigia, o vigia.py manda "parar" pela entrada (stdin) para encerrar
+        de forma limpa. Se o vigia morrer, a entrada fecha (EOF) e paramos também,
+        em vez de ficar gravando sem ninguém olhando.
+        """
+        for linha in sys.stdin:
+            if linha.strip() == "parar":
+                break
+        if not self.parar.is_set():
+            log("Pedido do vigia: encerrando a gravação...")
+            self.parar.set()
 
     # ---- durante a live
 
@@ -193,8 +213,13 @@ class Orquestrador:
         log("Rodando o detector uma última vez...")
         self.rodar_detector()
         self.esperar_transcricao()
-        self.resumo()
-        if config.APAGAR_BLOCOS_NO_FIM:
+        cortes = self.resumo()
+        if self.modo_vigia:
+            # Cortes e transcrições prontos: agora é seguro apagar a gravação
+            if config.APAGAR_BLOCOS_VIGIA:
+                self.apagar_blocos_sem_perguntar()
+            self.salvar_resumo(cortes)
+        elif config.APAGAR_BLOCOS_NO_FIM:
             self.perguntar_apagar_blocos()
 
     def esperar_transcricao(self) -> None:
@@ -217,7 +242,7 @@ class Orquestrador:
             pasta_cortes.rmdir()                 # não deixa pasta vazia se não houve corte
         return pasta_cortes, cortes
 
-    def resumo(self) -> None:
+    def resumo(self) -> list[dict]:
         pasta_cortes, cortes = self.cortes_da_sessao()
         minutos = (time.monotonic() - self.inicio) / 60
         print("\n" + "=" * 60)
@@ -230,6 +255,27 @@ class Orquestrador:
             print(f"   Onde:            {pasta_cortes}")
             print(f"   Resumo p/ Claude: {pasta_cortes / 'lista.md'}")
         print("=" * 60 + "\n")
+        return cortes
+
+    def salvar_resumo(self, cortes: list[dict]) -> None:
+        """resumo.json na pasta da sessão: é por ele que o vigia sabe como foi a live."""
+        resumo = {
+            "canal": self.canal,
+            "duracao_segundos": round(self.fim_gravacao - self.inicio),
+            "mensagens": self.monitor.total if self.monitor else 0,
+            "candidatos": len(self.candidatos),
+            "cortes": len(cortes),
+            "pasta_cortes": str(cortador.pasta_dos_cortes(self.pasta)) if cortes else None,
+        }
+        (self.pasta / "resumo.json").write_text(
+            json.dumps(resumo, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def apagar_blocos_sem_perguntar(self) -> None:
+        blocos = sorted(self.pasta.glob("bloco_*.ts"))
+        if blocos:
+            gb = sum(b.stat().st_size for b in blocos) / 1024**3
+            apagar_blocos(blocos)
+            log(f"{len(blocos)} bloco(s) apagado(s), {gb:.1f} GB liberados.")
 
     def perguntar_apagar_blocos(self) -> None:
         """Apaga só os vídeos .ts. Os arquivos pequenos (sessão, candidatos) ficam."""
@@ -255,10 +301,15 @@ def apagar_blocos(blocos: list[Path]) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print("Uso: python main.py nomedocanal   (ou o link da live na Twitch)")
-        sys.exit(1)
-    Orquestrador(nome_do_canal(sys.argv[1])).rodar()
+    parser = argparse.ArgumentParser(description="Grava uma live e salva os cortes automáticos.")
+    parser.add_argument("canal", help="nome do canal ou link da live na Twitch")
+    parser.add_argument("--vigia", action="store_true",
+                        help="usado pelo vigia.py: sem perguntas no terminal, para quando ele pedir")
+    args = parser.parse_args()
+    if args.vigia:
+        # O vigia tolera quedas maiores antes de considerar que a live acabou
+        config.TEMPO_ESPERA_FIM_LIVE = config.OFFLINE_TOLERANCIA
+    Orquestrador(nome_do_canal(args.canal), modo_vigia=args.vigia).rodar()
 
 
 if __name__ == "__main__":
