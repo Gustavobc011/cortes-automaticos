@@ -198,6 +198,9 @@ class Trecho:
                 "--stdout",                 # manda o vídeo para a saída padrão (o "cano")
                 "--loglevel", "info",       # mensagens de anúncio aparecem no nível info
             ],
+            # O streamlink não lê nada da entrada. Sem o DEVNULL ele herdaria a
+            # entrada do main.py, que no modo vigia é um "cano" vindo do vigia.py.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=GRUPO_SEPARADO,
