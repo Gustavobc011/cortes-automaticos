@@ -3,3 +3,5 @@
 faster-whisper==1.2.1   # transcrição dos cortes (etapa 5)
 av<17                   # o faster-whisper 1.2.1 ainda não funciona com o PyAV 17 ou mais novo
 psutil==7.2.2          # prioridade "abaixo do normal" do processo de transcrição
+pystray==0.19.5        # ícone do vigia na bandeja do Windows
+Pillow==13.0.0         # desenha a bolinha colorida do ícone
