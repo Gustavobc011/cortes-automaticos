@@ -155,6 +155,11 @@ class Sessao:
         })
         self.salvar()
 
+    def remover_trecho(self, numero: int) -> None:
+        """Tira do registro um trecho que não salvou nenhum vídeo (o ffmpeg travou)."""
+        self.dados["trechos"] = [t for t in self.dados["trechos"] if t["numero"] != numero]
+        self.salvar()
+
     def registrar_anuncio(self, evento: str, segundos: int | None = None) -> None:
         self.dados["anuncios"].append({
             "hora": agora().isoformat(timespec="milliseconds"),
@@ -188,6 +193,9 @@ class Trecho:
         self.em_anuncio = False        # streamlink está pulando um anúncio agora
         self.ultimo_dado = time.monotonic()
         self.bytes_recebidos = 0
+        # Para perceber se o ffmpeg recebe o vídeo mas não salva nada no disco
+        self.bytes_salvos = 0
+        self.ultimo_crescimento = time.monotonic()
 
     # ---- início e fim
 
@@ -217,8 +225,10 @@ class Trecho:
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel", "error",             # só mostra mensagens se der erro
-                "-f", "mpegts",                   # o streamlink entrega MPEG-TS
+                # Sem "-f" na entrada: o ffmpeg descobre o formato sozinho. A Twitch
+                # manda MPEG-TS em alguns canais e MP4 fragmentado em outros.
                 "-i", "pipe:0",                   # lê o vídeo que o Python repassa
+                "-map", "0:v:0", "-map", "0:a:0", # só 1 faixa de vídeo e 1 de áudio
                 "-c", "copy",                     # copia sem recodificar (leve pro notebook)
                 "-f", "segment",                  # modo "dividir em blocos"
                 "-segment_time", str(config.DURACAO_BLOCO),
@@ -237,6 +247,15 @@ class Trecho:
 
     def segundos_sem_dados(self) -> float:
         return time.monotonic() - self.ultimo_dado
+
+    def segundos_sem_salvar(self) -> float:
+        """Há quantos segundos os blocos deste trecho não crescem no disco."""
+        tamanho = sum(b.stat().st_size for b in self.sessao.pasta.glob("bloco_*.ts")
+                      if int(b.stem.removeprefix("bloco_")) >= self.primeiro_bloco)
+        if tamanho > self.bytes_salvos:
+            self.bytes_salvos = tamanho
+            self.ultimo_crescimento = time.monotonic()
+        return time.monotonic() - self.ultimo_crescimento
 
     def parar(self) -> None:
         """Encerra os dois processos sem corromper o bloco atual."""
@@ -263,6 +282,7 @@ class Trecho:
             self.ultimo_dado = time.monotonic()
             if not self.recebeu_dados:
                 self.recebeu_dados = True
+                self.ultimo_crescimento = time.monotonic()
                 inicio = agora()
                 self._iniciar_ffmpeg()
                 self.sessao.registrar_trecho(self.numero, inicio, self.primeiro_bloco)
@@ -294,6 +314,7 @@ class Trecho:
             elif "Resuming stream output" in linha:
                 self.em_anuncio = False
                 self.ultimo_dado = time.monotonic()
+                self.ultimo_crescimento = time.monotonic()   # no anúncio o bloco não cresce
                 log("Anúncio acabou, gravação retomada.")
                 self.sessao.registrar_anuncio("pausa_fim")
             elif m := re.search(r"Opening stream: (\S+)", linha):
@@ -359,7 +380,16 @@ def gravar(entrada: str, parar: threading.Event | None = None,
                         "Conexão travada, reconectando...")
                     break
 
+                # Vídeo chegando, mas nada sendo salvo: o ffmpeg travou
+                if (trecho.recebeu_dados and not trecho.em_anuncio
+                        and trecho.segundos_sem_salvar() > config.TEMPO_MAXIMO_SEM_DADOS):
+                    log(f"ERRO: o vídeo está chegando, mas nada foi salvo no disco há "
+                        f"{config.TEMPO_MAXIMO_SEM_DADOS} s (o ffmpeg travou). Reconectando...")
+                    break
+
             trecho.parar()
+            if trecho.recebeu_dados and trecho.bytes_salvos == 0:
+                sessao.remover_trecho(trecho.numero)      # não aponta para um bloco que não existe
 
             # Decide se reconecta ou se a live acabou
             if trecho.recebeu_dados:

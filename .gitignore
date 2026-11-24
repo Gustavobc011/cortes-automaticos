@@ -19,6 +19,9 @@ dados/parar_vigia
 *.ts
 *.mp4
 
+# Segredos (token do bot do Telegram): nunca subir para o GitHub
+.env
+
 # Configurações locais do editor / Claude Code
 .claude/settings.local.json
 .vscode/
