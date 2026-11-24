@@ -83,7 +83,7 @@ def notificar(titulo: str, texto: str) -> None:
     subprocess.Popen(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         env={**os.environ, "TOAST_XML": xml},   # o texto vai por variável: sem problema com aspas
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
@@ -198,6 +198,9 @@ class Orquestrador:
         self.transcritor = subprocess.Popen(
             [sys.executable, str(PASTA_PROJETO / "transcritor.py"), str(pasta_cortes)],
             cwd=PASTA_PROJETO, creationflags=FLAGS_TRANSCRITOR,
+            # Entrada vazia: no modo vigia a entrada do main é o "cano" do vigia, e um
+            # Python que herda um cano sendo lido por outra thread trava ao iniciar
+            stdin=subprocess.DEVNULL,
         )
 
     # ---- fim

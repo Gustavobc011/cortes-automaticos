@@ -52,7 +52,7 @@ def extrair_audio(video: Path, destino: Path) -> None:
          "-ac", "1",           # mono
          "-ar", "16000",       # 16 kHz
          str(destino)],
-        check=True,
+        check=True, stdin=subprocess.DEVNULL,
     )
 
 
