@@ -308,6 +308,14 @@ def detectar(pasta: Path) -> list[dict]:
 
 def salvar_candidatos(pasta: Path, candidatos: list[dict]) -> Path:
     destino = pasta / "candidatos.json"
+    # O detector refaz a lista do zero a cada rodada: mantém as avaliações
+    # feitas pelo Telegram (os números dos candidatos não mudam entre rodadas)
+    if destino.exists():
+        anteriores = json.loads(destino.read_text(encoding="utf-8"))
+        avaliacoes = {c["numero"]: c["avaliacao"] for c in anteriores if "avaliacao" in c}
+        for c in candidatos:
+            if c["numero"] in avaliacoes and "avaliacao" not in c:
+                c["avaliacao"] = avaliacoes[c["numero"]]
     destino.write_text(json.dumps(candidatos, indent=2, ensure_ascii=False), encoding="utf-8")
     return destino
 

@@ -16,9 +16,12 @@ Antes de cortar, o detector roda de novo para usar os dados mais recentes.
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -44,8 +47,84 @@ def carregar_registro(pasta_cortes: Path) -> list[dict]:
 
 
 def salvar_registro(pasta_cortes: Path, registro: list[dict]) -> None:
+    # Escreve num arquivo temporário e troca de uma vez: quem estiver lendo
+    # (o bot do Telegram, por exemplo) nunca pega o arquivo pela metade
     texto = json.dumps(registro, indent=2, ensure_ascii=False)
-    (pasta_cortes / "cortes.json").write_text(texto, encoding="utf-8")
+    temporario = pasta_cortes / "cortes.json.tmp"
+    temporario.write_text(texto, encoding="utf-8")
+    os.replace(temporario, pasta_cortes / "cortes.json")
+
+
+# ---------------------------------------------------------------- avaliação (Telegram)
+
+def _mover_corte(origem: Path, destino: Path, arquivo: str) -> None:
+    """Move o .mp4 e o .srt de um corte de uma pasta para outra."""
+    destino.mkdir(exist_ok=True)
+    for caminho in (origem / arquivo, (origem / arquivo).with_suffix(".srt")):
+        if caminho.exists():
+            shutil.move(caminho, destino / caminho.name)
+            os.utime(destino / caminho.name)   # a data do arquivo vira a do descarte
+
+
+def avaliar_corte(pasta_cortes: Path, arquivo: str, avaliacao: str | None) -> dict:
+    """
+    Marca um corte como "aprovado", "descartado" ou None (sem avaliação, o "desfazer").
+    Descartado não é apagado: vai para descartados/ dentro da pasta da live, e
+    limpar_descartados() apaga depois de DIAS_MANTER_DESCARTADOS. Os blocos da
+    gravação nunca são tocados aqui.
+    """
+    registro = carregar_registro(pasta_cortes)
+    corte = next(c for c in registro if c["arquivo"] == arquivo)
+    descartados = pasta_cortes / "descartados"
+    estava_descartado = corte.get("avaliacao") == "descartado"
+
+    if avaliacao == "descartado" and not estava_descartado:
+        _mover_corte(pasta_cortes, descartados, arquivo)
+    elif estava_descartado and avaliacao != "descartado":
+        if not (descartados / arquivo).exists():
+            raise FileNotFoundError("esse corte descartado já foi apagado")
+        _mover_corte(descartados, pasta_cortes, arquivo)
+
+    corte["avaliacao"] = avaliacao
+    corte["avaliado_em"] = datetime.now().isoformat(timespec="seconds")
+    salvar_registro(pasta_cortes, registro)
+    gerar_lista_md(pasta_cortes, registro)
+    _marcar_candidato(corte, avaliacao)
+    return corte
+
+
+def _marcar_candidato(corte: dict, avaliacao: str | None) -> None:
+    """Anota a avaliação também no candidatos.json da gravação (se ainda existir)."""
+    arquivo = config.PASTA_BLOCOS / corte["sessao"] / "candidatos.json"
+    if not arquivo.exists():
+        return
+    candidatos = json.loads(arquivo.read_text(encoding="utf-8"))
+    for c in candidatos:
+        if c.get("numero") == corte["candidato"]:
+            c["avaliacao"] = avaliacao
+    detector.salvar_candidatos(arquivo.parent, candidatos)
+
+
+def limpar_descartados(dias: int) -> int:
+    """Apaga de vez os cortes descartados há mais de `dias` dias. Devolve quantos apagou."""
+    limite = time.time() - dias * 86400
+    apagados = 0
+    for descartados in config.PASTA_CORTES.glob("*/descartados"):
+        velhos = [a for a in descartados.iterdir() if a.is_file() and a.stat().st_mtime < limite]
+        if not velhos:
+            continue
+        for arquivo in velhos:
+            arquivo.unlink()
+        apagados += sum(a.suffix == ".mp4" for a in velhos)
+        pasta_cortes = descartados.parent
+        registro = carregar_registro(pasta_cortes)
+        nomes = {a.name for a in velhos}
+        for c in registro:
+            if c["arquivo"] in nomes:
+                c["descarte_apagado"] = True
+        salvar_registro(pasta_cortes, registro)
+        gerar_lista_md(pasta_cortes, registro)
+    return apagados
 
 
 def corte_existente(registro: list[dict], sessao: str, inicio: str, fim: str) -> dict | None:
@@ -71,6 +150,7 @@ def rodar_ffmpeg(argumentos: list[str]) -> None:
     resultado = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *argumentos],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,   # o ffmpeg lê atalhos de teclado da entrada: não herda a do main
     )
     if resultado.returncode != 0:
         print(resultado.stderr)
@@ -109,7 +189,7 @@ def extrair_trechos(pasta_sessao: Path, partes: list[dict], destino: Path) -> No
 def duracao_video(arquivo: Path) -> float:
     saida = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(arquivo)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, stdin=subprocess.DEVNULL,
     )
     return float(saida.stdout.strip() or 0)
 
@@ -193,6 +273,9 @@ def formatar_duracao(segundos: float) -> str:
     return f"{minutos}min{segundos:02d}" if minutos else f"{segundos}s"
 
 
+TEXTO_AVALIACAO = {"aprovado": "👍 aprovado", "descartado": "👎 descartado", None: "sem avaliação"}
+
+
 def gerar_lista_md(pasta_cortes: Path, registro: list[dict]) -> None:
     """Reescreve o lista.md com todos os cortes da pasta."""
     linhas = [
@@ -205,10 +288,16 @@ def gerar_lista_md(pasta_cortes: Path, registro: list[dict]) -> None:
     for c in registro:
         pico = c["pico"]
         hora = datetime.fromisoformat(c["horario_pico"])
+        avaliacao = c.get("avaliacao")
+        if avaliacao == "descartado":
+            arquivo = "(apagado)" if c.get("descarte_apagado") else f"`descartados/{c['arquivo']}`"
+        else:
+            arquivo = f"`{c['arquivo']}`"
         linhas += [
             f"## {c['numero']:02d} · {hora:%Hh%M} · {formatar_duracao(c['duracao'])} · nota {c['nota']}",
             "",
-            f"- Arquivo: `{c['arquivo']}`",
+            f"- Arquivo: {arquivo}",
+            f"- Avaliação: {TEXTO_AVALIACAO[avaliacao]}",
             f"- Pico do chat: {pico['maior_janela']} mensagens em 10 s "
             f"({pico['razao']}x o normal), {c['reacoes_pct']}% com reações",
             f"- O chat dizia: {', '.join(c['mensagens_exemplo'])}",
