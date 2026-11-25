@@ -79,7 +79,7 @@ APAGAR_BLOCOS_NO_FIM = True        # apaga a gravação inteira no fim e mantém
 
 # ---------------- VIGIA (modo automático, vigia.py) ----------------
 # Ordem de prioridade: o 1º tem preferência máxima. Troque pelos canais que você quer.
-CANAIS_VIGIADOS = ["alanzoka", "cellbit", "bisteconee", "facada"]
+CANAIS_VIGIADOS = ["bisteconee", "alanzoka", "cellbit", "facada"]
 INTERVALO_VIGIA = 120              # segundos entre cada checagem de quem está ao vivo
 CATEGORIA_ALVO = "Grand Theft Auto VI"   # só grava lives nessa categoria (None = qualquer uma)
 CANAIS_QUALQUER_CATEGORIA = []     # canais da lista que gravam em qualquer categoria
