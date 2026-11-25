@@ -25,6 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import blocos
 import config
 import detector
 
@@ -174,6 +175,16 @@ def inicio_do_bloco(bloco: Path) -> float:
 
 
 def extrair_trechos(pasta_sessao: Path, partes: list[dict], destino: Path) -> None:
+    """
+    Recorta o momento do(s) bloco(s) e salva num .mp4. Enquanto isso, a live
+    fica marcada como ocupada: o /blocos do Telegram não deixa apagar os blocos
+    no meio de um corte, de uma extensão ou de uma correção.
+    """
+    with blocos.ocupada(pasta_sessao, "corte em andamento"):
+        _extrair_trechos(pasta_sessao, partes, destino)
+
+
+def _extrair_trechos(pasta_sessao: Path, partes: list[dict], destino: Path) -> None:
     """
     Recorta o momento do(s) bloco(s) e salva num .mp4.
 

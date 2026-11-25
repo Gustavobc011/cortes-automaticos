@@ -29,6 +29,7 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
+import blocos
 import config
 import cortador
 import estado_vigia
@@ -43,10 +44,16 @@ AJUDA = (
     "/retomar - volta a vigiar os canais\n"
     "/parar - encerra o vigia (pede confirmação)\n"
     "/cortes - cortes de hoje e suas avaliações\n"
+    "/blocos - gravações brutas guardadas no disco, com botão para apagar\n"
     "/ajuda - esta lista\n\n"
     "Em cada corte: 👍 Bom marca como aprovado, 👎 Descartar move para descartados/ "
-    f"(apagado depois de {config.DIAS_MANTER_DESCARTADOS} dias) e ↩️ Desfazer devolve."
+    f"(apagado depois de {config.DIAS_MANTER_DESCARTADOS} dias) e ↩️ Desfazer devolve.\n\n"
+    "Os blocos só são apagados quando você pede (e confirma). A live que está gravando "
+    "ou sendo cortada/transcrita aparece como 🔒 protegida, sem botão."
 )
+
+REPETIR_AVISO_DISCO = 6 * 3600         # disco ainda cheio: lembra de novo depois de 6 h
+LIVES_SUGERIDAS_DISCO = 3              # quantas lives antigas sugerir no aviso de disco
 
 
 class _ConexaoIPv4(http.client.HTTPSConnection):
@@ -131,6 +138,7 @@ class BotTelegram:
         self.conhecidos: set[str] = set()        # "pasta/arquivo" que já vimos
         self.vendo_desde: dict[str, float] = {}  # quando vimos um corte sem transcrição
         self.offset: int | None = None           # próximo update que queremos do Telegram
+        self.disco_avisado_em: float | None = None   # último aviso de disco quase cheio
         self.threads = [
             threading.Thread(target=self._laco_envio, name="telegram-envio", daemon=True),
             threading.Thread(target=self._laco_receber, name="telegram-receber", daemon=True),
@@ -323,6 +331,8 @@ class BotTelegram:
                               {"text": "Não", "callback_data": "parar:nao"}]])
         elif comando == "/cortes":
             self._responder(self.texto_cortes_de_hoje())
+        elif comando == "/blocos":
+            self._responder(*self.mensagem_blocos())
         else:
             self._responder("Não conheço esse comando. Veja a lista em /ajuda.")
 
@@ -359,8 +369,11 @@ class BotTelegram:
                 self._editar(clique, "Ok, o vigia continua.", None)
             self._responder_clique(clique)
             return
+        if acao in ("blap", "blmt", "blsim", "blnao"):
+            self._clique_blocos(clique, acao, corte_id)
+            return
 
-        avaliacao = {"bom": "aprovado", "desc": "descartado", "desf": None}.get(acao, "?")
+        avaliacao ={"bom": "aprovado", "desc": "descartado", "desf": None}.get(acao, "?")
         info = self.avisados["cortes"].get(corte_id)
         if avaliacao == "?" or info is None:
             self._responder_clique(clique, "Botão desconhecido.", alerta=True)
@@ -401,12 +414,155 @@ class BotTelegram:
             texto += f"\n\nSua escolha: <b>{TEXTO_AVALIACAO[avaliacao]}</b>"
         return texto
 
+    # ---------------------------------------------------------------- blocos da gravação
+
+    @staticmethod
+    def descricao_live(live: blocos.Live) -> str:
+        """'#alanzoka (25/11 14h17)'."""
+        return f"#{live.canal} ({live.inicio:%d/%m %Hh%M})"
+
+    @classmethod
+    def linha_live(cls, live: blocos.Live) -> str:
+        linha = (f"<b>{html.escape(cls.descricao_live(live))}</b> · {blocos.formatar_tamanho(live.tamanho)}\n"
+                 f"   {live.cortes} corte(s), {live.sem_avaliacao} sem avaliação")
+        if live.protecao:
+            linha += f"\n   🔒 protegida: {html.escape(live.protecao)}"
+        return linha
+
+    @classmethod
+    def botao_apagar(cls, live: blocos.Live) -> list:
+        # callback_data tem limite de 64 bytes: o nome da pasta cabe com folga
+        return [{"text": f"🗑 Apagar {cls.descricao_live(live)}", "callback_data": f"blap:{live.nome}"}]
+
+    @staticmethod
+    def texto_espaco() -> str:
+        return f"💾 Espaço livre no disco: <b>{blocos.formatar_tamanho(blocos.espaco_livre())}</b>"
+
+    def mensagem_blocos(self) -> tuple[str, list]:
+        """O /blocos: espaço livre e cada live que ainda tem blocos."""
+        lives = blocos.listar()
+        if not lives:
+            return self.texto_espaco() + "\n\nNenhuma live com blocos guardados.", []
+        total = sum(l.tamanho for l in lives)
+        texto = (f"{self.texto_espaco()}\n<b>Blocos guardados: {len(lives)} live(s), "
+                 f"{blocos.formatar_tamanho(total)}</b>\n\n" + "\n\n".join(self.linha_live(l) for l in lives))
+        botoes = [self.botao_apagar(l) for l in lives if not l.protecao]
+        return resumir(texto, 4000), botoes
+
+    @staticmethod
+    def botoes_live_encerrada(nome: str) -> list:
+        return [[{"text": "🗑 Apagar blocos", "callback_data": f"blap:{nome}"},
+                 {"text": "📦 Manter", "callback_data": f"blmt:{nome}"}]]
+
+    def _clique_blocos(self, clique: dict, acao: str, nome: str) -> None:
+        """
+        blap  pediu para apagar -> manda a confirmação (Sim/Não), se a live não está protegida
+        blsim confirmou         -> apaga (a proteção é conferida de novo na hora)
+        blnao desistiu
+        blmt  "Manter" na mensagem de live encerrada
+        """
+        try:
+            live = blocos.info(nome)
+        except ValueError:
+            self._responder_clique(clique, "Botão desconhecido.", alerta=True)
+            return
+
+        if acao == "blmt":
+            original = html.escape(clique["message"].get("text", ""))
+            self._editar(clique, f"{original}\n\n📦 <b>Blocos mantidos.</b> Para apagar depois: /blocos", None)
+            log.info(f"Telegram: blocos de {nome} mantidos.")
+            self._responder_clique(clique, "Blocos mantidos 📦")
+            return
+        if acao == "blnao":
+            self._editar(clique, "Ok, nada foi apagado.", None)
+            self._responder_clique(clique)
+            return
+        if live is None:
+            if acao == "blsim":
+                self._editar(clique, "Esses blocos já tinham sido apagados.", None)
+            self._responder_clique(clique, "Esses blocos já foram apagados.", alerta=True)
+            return
+        if live.protecao:
+            if acao == "blsim":
+                self._editar(clique, f"🔒 Não apaguei {html.escape(self.descricao_live(live))}: "
+                                     f"{html.escape(live.protecao)}.", None)
+            self._responder_clique(clique, f"🔒 Protegida: {live.protecao}. Tente depois.", alerta=True)
+            return
+
+        if acao == "blap":
+            self._responder(self.texto_confirmacao(live),
+                            [[{"text": "Sim, apagar", "callback_data": f"blsim:{nome}"},
+                              {"text": "Não", "callback_data": f"blnao:{nome}"}]])
+            self._responder_clique(clique)
+            return
+
+        # blsim: apaga de verdade
+        try:
+            liberado = blocos.apagar(nome)
+        except blocos.LiveProtegida as e:
+            self._editar(clique, f"🔒 Não apaguei {html.escape(self.descricao_live(live))}: "
+                                 f"{html.escape(str(e))}.", None)
+            self._responder_clique(clique, f"🔒 Protegida: {e}", alerta=True)
+            return
+        except FileNotFoundError:
+            self._editar(clique, "Esses blocos já tinham sido apagados.", None)
+            self._responder_clique(clique)
+            return
+        except OSError as e:
+            log.error(f"Telegram: erro apagando os blocos de {nome}: {e}")
+            self._editar(clique, f"⚠️ Erro ao apagar os blocos de {html.escape(self.descricao_live(live))}: "
+                                 f"{html.escape(str(e))}", None)
+            self._responder_clique(clique)
+            return
+        livre = blocos.formatar_tamanho(blocos.espaco_livre())
+        log.info(f"Blocos apagados pelo Telegram: {nome} ({live.blocos} bloco(s), "
+                 f"{blocos.formatar_tamanho(liberado)} liberados, {livre} livres agora).")
+        self._editar(clique, f"✅ Blocos de <b>{html.escape(self.descricao_live(live))}</b> apagados.\n"
+                             f"Liberado: <b>{blocos.formatar_tamanho(liberado)}</b>\n"
+                             f"Livre agora: <b>{livre}</b>\n\nOs cortes continuam em cortes/.", None)
+        self._responder_clique(clique, "Apagado 🗑")
+
+    def texto_confirmacao(self, live: blocos.Live) -> str:
+        texto = (f"🗑 Apagar os blocos de <b>{html.escape(self.descricao_live(live))}</b>?\n"
+                 f"{live.blocos} bloco(s), <b>{blocos.formatar_tamanho(live.tamanho)}</b>.\n\n"
+                 "⚠️ Isso <b>não pode ser desfeito</b>. Os cortes já salvos continuam em cortes/.")
+        if live.sem_avaliacao:
+            texto += (f"\n\n⚠️ Essa live tem <b>{live.sem_avaliacao} corte(s) sem avaliação</b>: depois de "
+                      "apagar os blocos não vai dar para estender esses cortes (pegar mais do vídeo "
+                      "antes ou depois).")
+        return texto
+
+    def _conferir_disco(self) -> None:
+        """Disco abaixo de ESPACO_MINIMO_GB: avisa (de novo a cada 6 h) e sugere as lives mais antigas."""
+        livre = blocos.espaco_livre()
+        if livre >= config.ESPACO_MINIMO_GB * 1024**3:
+            self.disco_avisado_em = None
+            return
+        if self.disco_avisado_em and time.monotonic() - self.disco_avisado_em < REPETIR_AVISO_DISCO:
+            return
+        self.disco_avisado_em = time.monotonic()
+        livres = [l for l in blocos.listar() if not l.protecao][:LIVES_SUGERIDAS_DISCO]
+        log.warning(f"Disco com pouco espaço: {blocos.formatar_tamanho(livre)} livres "
+                    f"(mínimo {config.ESPACO_MINIMO_GB} GB). Avisado no Telegram.")
+        texto = (f"⚠️ <b>Disco quase cheio: {blocos.formatar_tamanho(livre)} livres</b> "
+                 f"(mínimo: {config.ESPACO_MINIMO_GB} GB).\n"
+                 f"Abaixo de {config.ESPACO_CRITICO_GB} GB a gravação para.\n\n")
+        if livres:
+            texto += "Lives mais antigas com blocos:\n\n" + "\n\n".join(self.linha_live(l) for l in livres)
+        else:
+            texto += "Nenhuma live com blocos que dê para apagar agora."
+        self.enviar(texto, [self.botao_apagar(l) for l in livres] or None)
+
     # ---------------------------------------------------------------- cortes novos
 
     def _laco_cortes(self) -> None:
         primeira_vez = True
         ultima_limpeza = 0.0
         while not self.parar_evento.is_set():
+            try:
+                self._conferir_disco()
+            except Exception:
+                log.exception("Erro conferindo o espaço em disco")
             try:
                 self._procurar_cortes_novos(primeira_vez)
                 primeira_vez = False

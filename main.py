@@ -30,6 +30,7 @@ import config
 import cortador
 import detector
 import gravador
+from blocos import liberar, marcar_ocupada
 from gravador import log
 from monitor_chat import MonitorChat, nome_do_canal
 
@@ -106,6 +107,7 @@ class Orquestrador:
         self.blocos_fechados = 0
         self.ultimo_detector = 0.0
         self.candidatos: list[dict] = []
+        self.marca: Path | None = None        # marca de "ocupada" na pasta da sessão
         self.transcritor: subprocess.Popen | None = None
         self.transcrever_de_novo = False      # chegou corte novo enquanto o transcritor rodava
 
@@ -114,6 +116,9 @@ class Orquestrador:
     def ao_criar_sessao(self, sessao: gravador.Sessao) -> None:
         """O gravador criou a pasta: o chat começa com o mesmo id de sessão."""
         self.pasta = sessao.pasta
+        # Marca a live como ocupada até os cortes e transcrições terminarem:
+        # enquanto isso o /blocos do Telegram não deixa apagar a gravação
+        self.marca = marcar_ocupada(sessao.pasta, "gravação em andamento")
         self.monitor = MonitorChat(self.canal, sessao.pasta.name)
         self.thread_chat = threading.Thread(target=self.monitor.rodar, daemon=True)
         self.thread_chat.start()
@@ -139,8 +144,11 @@ class Orquestrador:
             thread_gravador.join()
         finally:
             self.fim_gravacao = time.monotonic()
-            self.encerrar()
-            manter_acordado(False)
+            try:
+                self.encerrar()
+            finally:
+                liberar(self.marca)               # agora os blocos podem ser apagados
+                manter_acordado(False)
 
     def ouvir_vigia(self) -> None:
         """
@@ -212,6 +220,10 @@ class Orquestrador:
         if not self.pasta or not (self.pasta / "sessao.json").exists():
             return  # nada foi gravado (canal offline)
 
+        # A gravação parou, mas a live continua protegida até o fim dos cortes
+        liberar(self.marca)
+        self.marca = marcar_ocupada(self.pasta, "cortes e transcrições em andamento")
+
         # Último bloco acabou de fechar: última rodada de cortes
         log("Rodando o detector uma última vez...")
         self.rodar_detector()
@@ -221,6 +233,8 @@ class Orquestrador:
             # Cortes e transcrições prontos: agora é seguro apagar a gravação
             if config.APAGAR_BLOCOS_VIGIA:
                 self.apagar_blocos_sem_perguntar()
+            else:
+                log(f"Blocos mantidos em {self.pasta} (apague pelo Telegram: /blocos).")
             self.salvar_resumo(cortes)
         elif config.APAGAR_BLOCOS_NO_FIM:
             self.perguntar_apagar_blocos()

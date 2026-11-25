@@ -85,7 +85,7 @@ CATEGORIA_ALVO = "Grand Theft Auto VI"   # só grava lives nessa categoria (None
 CANAIS_QUALQUER_CATEGORIA = []     # canais da lista que gravam em qualquer categoria
 IGNORAR_REPRISES = True            # não grava "RERUN"/"REPRISE" (reprise de uma live antiga)
 OFFLINE_TOLERANCIA = 300           # segundos sem stream (ou fora da categoria) até a live "acabar"
-APAGAR_BLOCOS_VIGIA = True         # no vigia não há quem responda: apaga os blocos sozinho no fim
+APAGAR_BLOCOS_VIGIA = False        # False = os blocos ficam até você apagar pelo Telegram (/blocos)
 ARQUIVO_LOG_VIGIA = PASTA_DADOS / "vigia.log"          # o que o vigia fez, para conferir depois
 PASTA_LOGS_GRAVACOES = PASTA_DADOS / "gravacoes"       # a saída completa de cada gravação
 ARQUIVO_PARAR_VIGIA = PASTA_DADOS / "parar_vigia"      # crie esse arquivo para o vigia encerrar

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import blocos
 import config
 import estado_vigia
 from estado_vigia import EstadoVigia
@@ -46,11 +47,11 @@ BOT = None                         # o bot do Telegram, se estiver ligado (criad
 _ultimos_problemas: dict[str, float] = {}
 
 
-def avisar(titulo: str, texto: str, emoji: str = "ℹ️") -> None:
+def avisar(titulo: str, texto: str, emoji: str = "ℹ️", botoes: list | None = None) -> None:
     """Notificação do Windows e mensagem no Telegram (se ligado). Nunca espera a internet."""
     notificar(titulo, texto)
     if BOT:
-        BOT.enviar(f"{emoji} <b>{html.escape(titulo)}</b>\n{html.escape(texto)}")
+        BOT.enviar(f"{emoji} <b>{html.escape(titulo)}</b>\n{html.escape(texto)}", botoes)
 
 
 def avisar_problema(titulo: str, texto: str) -> None:
@@ -217,7 +218,8 @@ class Vigia:
         if config.ARQUIVO_PARAR_VIGIA.exists():
             config.ARQUIVO_PARAR_VIGIA.unlink()
             log.info("Apaguei um arquivo parar_vigia antigo que tinha sobrado.")
-        canais = ", ".join(config.CANAIS_VIGIADOS)
+        blocos.limpar_restos()                        # exclusão que ficou pela metade
+        canais =", ".join(config.CANAIS_VIGIADOS)
         alvo = config.CATEGORIA_ALVO or "qualquer categoria"
         log.info(f"Vigia iniciado. Canais (em ordem de prioridade): {canais} | {alvo}")
         avisar("Vigia iniciado", f"Canais: {canais}\nCategoria: {alvo}", "🟢")
@@ -387,9 +389,20 @@ class Vigia:
             return
         texto = (f"Duração: {formatar_duracao(resumo['duracao_segundos'])}\n"
                  f"Cortes salvos: {resumo['cortes']}\nMotivo: {motivo}")
+        # Os blocos ficaram no disco (APAGAR_BLOCOS_VIGIA = False): a mensagem mostra o
+        # tamanho e os botões para apagar ou manter (o apagar pede confirmação)
+        botoes = None
+        try:
+            live = blocos.info(gravacao.pasta.name)
+        except ValueError:
+            live = None
+        if live:
+            texto += f"\nBlocos: {blocos.formatar_tamanho(live.tamanho)} ({live.blocos} arquivo(s))"
+            if BOT:
+                botoes = BOT.botoes_live_encerrada(live.nome)
         log.info(f"Live terminou: #{gravacao.canal}: {texto.replace(chr(10), ' | ')} | "
                  f"{resumo['mensagens']} mensagens, {resumo['candidatos']} candidatos")
-        avisar(f"Live encerrada: #{gravacao.canal}", texto, "🏁")
+        avisar(f"Live encerrada: #{gravacao.canal}", texto, "🏁", botoes)
 
     def encerrar(self) -> None:
         """Pede para a gravação atual parar e espera os cortes ficarem prontos."""

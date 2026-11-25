@@ -16,7 +16,7 @@ O main.py (etapa 6) roda este arquivo como um processo separado.
 """
 
 import argparse
-import argparse
+import contextlib
 import subprocess
 import sys
 import tempfile
@@ -25,6 +25,7 @@ from pathlib import Path
 
 import psutil
 
+import blocos
 import config
 from cortador import carregar_registro, gerar_lista_md, salvar_registro
 
@@ -110,6 +111,14 @@ def transcrever_pasta(pasta_cortes: Path, refazer: bool = False) -> int:
         print("Nenhum corte para transcrever.")
         return 0
 
+    # As lives desses cortes ficam protegidas no /blocos enquanto a transcrição roda
+    with contextlib.ExitStack() as marcas:
+        for sessao in {c["sessao"] for c in pendentes}:
+            marcas.enter_context(blocos.ocupada(config.PASTA_BLOCOS / sessao, "transcrição em andamento"))
+        return _transcrever(pasta_cortes, pendentes)
+
+
+def _transcrever(pasta_cortes: Path, pendentes: list[dict]) -> int:
     print(f"Carregando o modelo '{config.MODELO_WHISPER}' "
           f"({config.THREADS_TRANSCRICAO} núcleos, prioridade abaixo do normal)...")
     modelo = carregar_modelo()

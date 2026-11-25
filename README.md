@@ -50,6 +50,7 @@ flowchart LR
 | extra | `estado_vigia.py` | O estado do vigia (vigiando, gravando, pausado) num lugar só: o ícone e o Telegram leem e fazem pedidos, só o vigia executa. |
 | extra | `bandeja.py` | Ícone perto do relógio do Windows: cor conforme o estado, pausar, retomar, abrir os cortes e o log, sair. |
 | extra | `telegram_bot.py` | Bot do Telegram: avisa cada corte (com botões para aprovar ou descartar), os eventos do vigia e os erros, e aceita comandos. |
+| extra | `blocos.py` | Lista as gravações brutas guardadas e decide se dá para apagar: protege a live que está gravando ou em processamento. |
 
 ### A nota de cada momento
 
@@ -72,7 +73,7 @@ e no máximo 3 min.
 - **[FFmpeg](https://ffmpeg.org/)**: grava em blocos e extrai os cortes
 - **SQLite** (modo WAL): guarda o chat
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)**: transcrição no processador (`int8`)
-- **psutil**: deixa a transcrição em prioridade baixa
+- **psutil**: deixa a transcrição em prioridade baixa e descobre quais processos estão gravando
 - **pystray + Pillow**: ícone do vigia na bandeja do Windows
 - **API do Telegram**: chamada direto com `urllib` (biblioteca padrão), sem biblioteca extra
 
@@ -160,8 +161,9 @@ Windows no login, e decide sozinho o que gravar:
   prioridade menor nunca interrompe um de prioridade maior.
 - **Fim da live:** o canal ficou offline ou fora do jogo por mais de
   `OFFLINE_TOLERANCIA` (5 min). Uma queda curta continua na mesma gravação.
-- **Disco:** no fim, depois que os cortes e as transcrições ficam prontos, os
-  blocos são apagados (`APAGAR_BLOCOS_VIGIA`), porque não há ninguém para responder.
+- **Disco:** os blocos ficam guardados até você mandar apagar pelo Telegram
+  (`APAGAR_BLOCOS_VIGIA = False`). Com `True`, eles são apagados sozinhos no fim,
+  depois que os cortes e as transcrições ficam prontos.
 - **Avisos:** notificação quando o vigia inicia, quando uma live começa, quando
   há troca (com o motivo) e quando a live termina (duração e cortes salvos).
   Tudo fica registrado em `dados/vigia.log`, e a saída completa de cada
@@ -186,9 +188,23 @@ computador):
   da pasta da live, e ele é apagado depois de `DIAS_MANTER_DESCARTADOS` (7 dias).
   **↩️ Desfazer** devolve. A escolha fica marcada no `lista.md` e no `candidatos.json`.
 - **Avisos:** vigia iniciado, live começou, troca de canal (com o motivo), live
-  encerrada (duração e cortes) e erros (disco quase cheio, gravação caiu).
+  encerrada (duração, cortes e tamanho dos blocos, com os botões **🗑 Apagar
+  blocos** e **📦 Manter**) e erros (gravação caiu, disco abaixo de
+  `ESPACO_MINIMO_GB`). O aviso de disco sugere as lives mais antigas, com botão
+  para apagar.
 - **Comandos:** `/status`, `/pausar`, `/retomar`, `/parar` (pede confirmação),
-  `/cortes` (os de hoje) e `/ajuda`.
+  `/cortes` (os de hoje), `/blocos` e `/ajuda`.
+- **Blocos (`/blocos`):** mostra o espaço livre e cada live que ainda tem blocos,
+  com streamer, data, tamanho, número de cortes e quantos estão sem avaliação.
+  Apagar sempre pede confirmação (Sim/Não), mostra o tamanho e avisa que não dá
+  para desfazer nem estender os cortes sem avaliação depois. Só a pasta
+  `blocos/<live>` é apagada, nunca os cortes. Cada exclusão fica no `vigia.log`.
+- **Proteção:** a live que está gravando, ou que tem cortes, transcrições,
+  extensões ou correções em andamento, aparece como 🔒 protegida, sem botão. A
+  proteção é conferida de novo na hora do "Sim". Quem usa a pasta deixa nela uma
+  marca `.ocupado_*` com o número do processo, que deixa de valer sozinha se o
+  processo morrer. Os testes ficam em `tests/test_blocos.py`
+  (`python -m unittest discover tests`).
 
 O bot só responde ao seu `chat_id` e ignora qualquer outra pessoa. Se a
 internet cair, as mensagens esperam numa fila salva em disco e saem quando ela
