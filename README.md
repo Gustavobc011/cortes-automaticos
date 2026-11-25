@@ -239,16 +239,32 @@ depois de salvos.
   Somando isso à hora real do primeiro byte de vídeo, cada segundo do vídeo tem
   um horário real, e é isso que liga o vídeo ao chat.
 
-### Por que `-c copy`
+### Por que `-c copy` na gravação, mas não nos cortes
 
-O `-c copy` copia o vídeo e o áudio como estão, sem recodificar.
-- **Gravação:** usa quase nada de CPU, o que é essencial para gravar horas
-  enquanto o notebook é usado para outra coisa.
-- **Cortes:** um corte de 3 min sai em poucos segundos, sem perder qualidade.
+O `-c copy` copia o vídeo e o áudio como estão, sem recodificar. Na
+**gravação** ele é essencial: usa quase nada de CPU, o que permite gravar horas
+enquanto o notebook é usado para outra coisa.
 
-O preço é que o corte só pode começar num keyframe, e a live tem um a cada 2 s.
-Por isso o corte leva 3 s extras de cada lado. Na junção entre dois blocos perdem-se
-uns 2 quadros (60 ms), imperceptível num corte que vai ser editado.
+Nos **cortes** ele foi usado no começo (um corte saía em menos de 1 s), mas
+causava um problema: com `-c copy` o vídeo só pode começar num keyframe, e a
+live tem um a cada 2 s. O ffmpeg então levava junto até 2 s de vídeo antes do
+ponto de corte e escondia isso com uma "lista de edição" do MP4. Muitos
+programas ignoram essa lista, e neles **o áudio tocava até 2 s atrasado**.
+
+Para medir isso com certeza, o teste [`tests/test_sincronia.py`](tests/test_sincronia.py)
+cria um vídeo com "verdade conhecida": um clarão na tela e um bipe no áudio no
+mesmo instante, a cada 5 s. Ele grava esse vídeo em blocos como o gravador,
+corta e confere onde o clarão e o bipe caem. Com `-c copy` o bipe vinha 1,7 s
+depois do clarão. Testei também começar no keyframe exato, o `-ss` na saída e a
+busca na entrada: este ffmpeg sempre recua um GOP inteiro.
+
+A solução foi **recodificar o corte** (`libx264 -preset veryfast`, em prioridade
+baixa e com metade dos núcleos), buscando o ponto de corte na entrada. O ffmpeg
+decodifica a partir do keyframe e descarta o que vem antes do ponto nas duas
+faixas, que começam juntas, sem lista de edição. Leva mais ou menos o tempo do
+próprio corte, em segundo plano. Depois de cada corte, a sincronia é medida com
+o ffprobe: acima de 0,1 s, o vigia avisa no log e no Telegram. Os cortes
+antigos são corrigidos com o [`corrigir_cortes.py`](corrigir_cortes.py).
 
 ### Por que usar o chat como sinal
 
