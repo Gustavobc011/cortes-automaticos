@@ -141,49 +141,124 @@ def corte_existente(registro: list[dict], sessao: str, inicio: str, fim: str) ->
 
 # ---------------------------------------------------------------- ffmpeg
 
-def rodar_ffmpeg(argumentos: list[str]) -> None:
+PRIORIDADE_BAIXA = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+
+
+def rodar_ffmpeg(argumentos: list[str], prioridade_baixa: bool = False) -> None:
     """
     Roda o ffmpeg e só mostra as mensagens dele se der erro de verdade.
-    (Ao cortar sem recodificar, ele reclama dos quadros antes do keyframe,
+    (Ao ler a partir do keyframe anterior, ele reclama dos quadros antes dele,
     o que é normal e não afeta o resultado.)
     """
     resultado = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *argumentos],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         stdin=subprocess.DEVNULL,   # o ffmpeg lê atalhos de teclado da entrada: não herda a do main
+        creationflags=PRIORIDADE_BAIXA if prioridade_baixa else 0,   # o CapCut tem preferência
     )
     if resultado.returncode != 0:
         print(resultado.stderr)
         raise RuntimeError("O ffmpeg falhou ao salvar o corte.")
 
 
+def inicio_do_bloco(bloco: Path) -> float:
+    """
+    O "relógio" de um bloco .ts não começa em 0 (o formato põe ~1,4 s de folga).
+    O inpoint/outpoint do concat usa esse relógio, então somamos isso aos
+    segundos que o detector calculou a partir do começo do bloco.
+    """
+    saida = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=start_time", "-of", "csv=p=0", str(bloco)],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+    return float(saida or 0)
+
+
 def extrair_trechos(pasta_sessao: Path, partes: list[dict], destino: Path) -> None:
     """
-    Recorta o momento do(s) bloco(s) com -c copy e salva num .mp4.
+    Recorta o momento do(s) bloco(s) e salva num .mp4.
 
     Usamos o "concat" do ffmpeg: um .txt lista os blocos e, para cada um, de
     que segundo (inpoint) até que segundo (outpoint) ler. Com um bloco só ou
-    com dois, é o mesmo comando, e o ffmpeg junta os pedaços sem recodificar.
+    com dois, é o mesmo comando.
+
+    Por que recodificar (RECODIFICAR_CORTES): com -c copy o vídeo só pode
+    começar num keyframe (a Twitch manda um a cada 2 s), então ele vem com até
+    2 s a mais que o áudio, e o MP4 esconde isso com uma "lista de edição" que
+    muitos programas ignoram: neles o áudio toca até 2 s atrasado. Recodificando
+    com a busca na ENTRADA (-ss antes do -i), o ffmpeg decodifica a partir do
+    keyframe e descarta o que vem antes do ponto de corte nas duas faixas: vídeo
+    e áudio começam no mesmo instante, num MP4 sem lista de edição.
     """
+    recodificar = config.RECODIFICAR_CORTES
     linhas = []
     for i, parte in enumerate(partes):
-        linhas.append(f"file '{(pasta_sessao / parte['bloco']).resolve().as_posix()}'")
-        if parte["de"] > 0.05:                # começa no meio do bloco
-            linhas.append(f"inpoint {parte['de']:.3f}")
-        if i == len(partes) - 1:              # o último pedaço termina no meio do bloco;
-            linhas.append(f"outpoint {parte['ate']:.3f}")  # os outros vão até o fim do arquivo
+        bloco = pasta_sessao / parte["bloco"]
+        linhas.append(f"file '{bloco.resolve().as_posix()}'")
+        primeiro, ultimo = i == 0 and parte["de"] > 0.05, i == len(partes) - 1
+        relogio = inicio_do_bloco(bloco) if (primeiro and not recodificar) or ultimo else 0.0
+        if primeiro and not recodificar:      # no -c copy o começo vai no próprio concat
+            linhas.append(f"inpoint {relogio + parte['de']:.3f}")
+        if ultimo:                            # o último pedaço termina no meio do bloco;
+            linhas.append(f"outpoint {relogio + parte['ate']:.3f}")  # os outros vão até o fim
+
+    if recodificar:
+        # Na linha do tempo do concat, o 0 é o começo do 1º bloco: o -ss vai até o ponto
+        busca = ["-ss", f"{partes[0]['de']:.3f}"]
+        codificacao = [
+            "-t", f"{sum(p['ate'] - p['de'] for p in partes):.3f}",
+            "-c:v", "libx264", "-preset", config.PRESET_CORTE, "-crf", str(config.QUALIDADE_CORTE),
+            "-pix_fmt", "yuv420p", "-threads", str(config.THREADS_TRANSCRICAO),
+            "-c:a", "aac", "-b:a", "160k",
+        ]
+    else:
+        busca, codificacao = [], ["-c", "copy", "-bsf:a", "aac_adtstoasc"]   # instantâneo, mas veja acima
 
     with tempfile.TemporaryDirectory() as temporaria:
         arquivo_lista = Path(temporaria) / "lista.txt"
         arquivo_lista.write_text("\n".join(linhas), encoding="utf-8")
         rodar_ffmpeg([
-            "-f", "concat", "-safe", "0", "-i", str(arquivo_lista),
+            *busca, "-f", "concat", "-safe", "0", "-i", str(arquivo_lista),
             "-map", "0:v:0", "-map", "0:a:0",  # só vídeo e áudio (ignora metadados da Twitch)
-            "-c", "copy",                      # sem recodificar: instantâneo e sem perder qualidade
-            "-bsf:a", "aac_adtstoasc",         # ajusta o formato do áudio AAC de .ts para .mp4
+            *codificacao,
             "-movflags", "+faststart",         # o vídeo começa a tocar antes de carregar inteiro
             str(destino),
-        ])
+        ], prioridade_baixa=recodificar)
+
+
+def conferir_sincronia(arquivo: Path) -> float | None:
+    """
+    Mede a sincronia de um corte recém-salvo. Se passar do limite, escreve uma
+    linha com "AVISO:", que o vigia repassa para o vigia.log e para o Telegram.
+    """
+    try:
+        diferenca = round(medir_sincronia(arquivo), 3)
+    except (RuntimeError, ValueError, KeyError) as e:
+        print(f"[{datetime.now():%H:%M:%S}] AVISO: não consegui medir a sincronia de {arquivo.name} ({e}).")
+        return None
+    if diferenca >= config.MAX_DIFERENCA_SINCRONIA:
+        print(f"[{datetime.now():%H:%M:%S}] AVISO: o corte {arquivo.name} está dessincronizado: "
+              f"áudio e vídeo começam com {diferenca:.2f} s de diferença.")
+    return diferenca
+
+
+def medir_sincronia(arquivo: Path) -> float:
+    """
+    Diferença (em segundos) entre o começo do áudio e o do vídeo, no pior caso:
+    respeitando e ignorando a lista de edição do MP4. Um corte bom fica perto de 0;
+    os cortes antigos com -c copy davam até 2 s.
+    """
+    diferencas = []
+    for opcoes in ([], ["-ignore_editlist", "1"]):
+        saida = subprocess.run(
+            ["ffprobe", "-v", "error", *opcoes, "-show_entries", "stream=codec_type,start_time",
+             "-of", "json", str(arquivo)],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout
+        inicios = {s["codec_type"]: float(s["start_time"]) for s in json.loads(saida)["streams"]
+                   if s["codec_type"] in ("audio", "video") and "start_time" in s}
+        if len(inicios) < 2:
+            raise RuntimeError(f"{arquivo.name}: falta a faixa de áudio ou de vídeo")
+        diferencas.append(abs(inicios["audio"] - inicios["video"]))
+    return max(diferencas)
 
 
 def duracao_video(arquivo: Path) -> float:
@@ -227,6 +302,7 @@ def cortar_candidato(pasta_sessao: Path, candidato: dict, motivo: str) -> dict |
     destino = pasta_cortes / nome
 
     extrair_trechos(pasta_sessao, partes, destino)
+    sincronia = conferir_sincronia(destino)
 
     corte = {
         "numero": sequencia,
@@ -243,6 +319,8 @@ def cortar_candidato(pasta_sessao: Path, candidato: dict, motivo: str) -> dict |
         "reacoes_pct": candidato["reacoes_pct"],
         "mensagens_exemplo": candidato["mensagens_exemplo"],
         "blocos": [p["bloco"] for p in partes],
+        "sincronia": sincronia,               # diferença entre o começo do áudio e do vídeo (s)
+        "recodificado": config.RECODIFICAR_CORTES,
         "transcricao": None,                  # preenchido pelo transcritor (etapa 5)
     }
     registro.append(corte)

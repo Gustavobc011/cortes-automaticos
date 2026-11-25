@@ -50,7 +50,15 @@ NOTA_MINIMA_AUTOCORTE = 4.0        # só salva corte automático acima dessa not
 MARGEM_ANTES_PICO = 45             # segundos antes do pico (o chat reage com atraso)
 DURACAO_MINIMA_CORTE = 60          # exigência de monetização do TikTok
 DURACAO_MAXIMA_CORTE = 180         # limite para o fim dinâmico não virar um vídeo longo demais
-MARGEM_KEYFRAME = 3                # segundos extras no início e no fim (o -c copy corta no keyframe)
+MARGEM_KEYFRAME = 3                # segundos extras no início e no fim do corte
+# Recodificar deixa áudio e vídeo começando no mesmo instante em qualquer programa.
+# Com -c copy (False) é instantâneo, mas o vídeo leva junto até 2 s antes do ponto
+# de corte e alguns programas (que ignoram a "lista de edição" do MP4) tocam o
+# áudio atrasado. Roda em prioridade baixa e com metade dos núcleos.
+RECODIFICAR_CORTES = True
+PRESET_CORTE = "veryfast"          # libx264: mais rápido = arquivo maior, mesma qualidade visual
+QUALIDADE_CORTE = 20               # CRF do libx264: menor = melhor qualidade (18 a 23 é o normal)
+MAX_DIFERENCA_SINCRONIA = 0.1      # segundos: acima disso o corte é avisado como dessincronizado
 # "KKK" (3 letras) também pega "kkkk..."; "CLAP" foi a palavra que mais subiu nos picos do teste
 PALAVRAS_REACAO = ["KKK", "CLAP", "KEKW", "LUL", "OMEGALUL", "CLIPA", "CLIP",
                    "NÃO ACREDITO", "MDS", "PogChamp", "Pog"]
